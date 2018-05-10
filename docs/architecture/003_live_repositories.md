@@ -1,3 +1,15 @@
+# Live repositories
+
+A live repository captures 
+
+## Live work trees
+
+A Git repository is associated with one or more work trees, which contain the files and directories that the user actually edits before creating commits. We propose to augment Git with *replicated work trees*, which can be replicated across multiple machines and continuously synchronized in real time in a conflict-free fashion.
+
+Live work trees are intended to support real-time collaborative coding and live streaming of edits to an audience. They also continuously persist all edits to disk without the need for an explicit save or commit step. Other than the presence of edits from other collaborators, using a live work tree in a supported editor feels exactly like using a traditional Git work tree. Files are opened, edited, and saved in the ordinary way, and you can interact with Git via any tool to commit, change branches, pull changes, etc.
+
+All live work trees associated with a repository are persisted in a single database that sits alongside the Git index. Persisted operations are cross-referenced with commit SHAs, allowing the keystroke-level edit history behind any commit to be retrieved and replayed later. When necessary, Xray gracefully accounts for changes that occurred outside of Xray by synthesizing operations.
+
 ## CRDT representation of the file system
 
 The file system CRDT is designed to interoperate with Git when it is available.
@@ -17,6 +29,19 @@ If no Git repository is present or if `HEAD` has not changed since the last sync
 If the underlying directory tree is associated with a Git repository, we store the most-recently-synced `HEAD` as a last-writer-wins register associated with the current working copy in the CRDT. If the `HEAD` has changed, either a new commit has been created or a different commit has been checked out. 
 
 A new commit has been created if the parent commit of the new `HEAD` matches the previous `HEAD` stored in our internal register.
+
+* HEAD doesn't change
+  * Generate operations based on a diff between previous snapshot and current snapshot of the file system
+* HEAD changes
+  * We detect the creation of a new commit
+    * Determine the subset of existing operations that most closely map to the new commit and express it as a state bitmap
+    * Apply any "fixup" operations required to transition from the operation subset and the state of the commit.
+  * We detect the checkout of an existing commit
+    
+
+* Unified identifier space: Each replica maintains a single local clock
+* Sparse state vectors: The state is a bitmap per site that represents a set of local clock values.
+
 
 # Going further with the CRDT
 
