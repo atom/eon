@@ -15,10 +15,12 @@ struct CommitSha {
     bytes: [u8; 20],
 }
 
+type VectorClock = HashMap<ReplicaId, LocalTimestamp>;
+
 // A unique state in the repository is defined by an epoch and a state vector relative to the start
 // of that epoch. The timestamp is assumed to be 0 for any replica id that does not have an entry
 // in the map, which indicates it did not produce any operations in that epoch.
-type State = (EpochId, HashMap<ReplicaId, LocalTimestamp>);
+type Version = (EpochId, VectorClock);
 
 // An Xray repository can be thought of in loose analogy to a git repository. It records a
 // fine-grained conflict-free edit history for one or more work trees. An Xray repository can
@@ -40,7 +42,7 @@ struct Repository {
 // interoperating with external tools that need access to the state of the work tree but aren't
 // designed with Xray in mind.
 struct WorkTree {
-    state: State,
+    version: Version,
     root: Node,
     epochs: HashMap<EpochId, Epoch>,
     local_clock: LocalTimestamp,
@@ -73,7 +75,7 @@ struct WorkTreeId {
 struct Epoch {
     local_id: LocalEpochId,
     parent_id: EpochId,
-    end_state: Option<EpochState>,
+    end_version: Option<VectorClock>,
     commit_sha: Option<CommitSha>,
     local_clock: LocalTimestamp, // This clock is used to generate timestamps for OperationIds
 }
@@ -134,7 +136,7 @@ struct OperationId {
 
 struct Register<T> {
     // RegisterEntry values form a total ordering and the first entry that is compatible with a
-    // given WorkTreeState is considered to contain the value of the register for that state.
+    // given version is considered to contain the value of the register for that state.
     // Eventually we can persist older entries to the database and only keep a small subset in
     // memory.
     entries: BTreeSet<RegisterEntry<T>>,
@@ -152,7 +154,7 @@ struct RegisterEntry<T> {
 
 // A Node represents a file or directory. Its name and parent directory are expressed as registers,
 // which allow the node to be renamed and moved concurrently and can be evaluated with respect to a
-// specific State.
+// specific Version.
 struct Node {
     id: OperationId,
     name: Register<String>,
