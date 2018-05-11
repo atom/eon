@@ -5,6 +5,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 use uuid::Uuid;
 
+trait Store {}
+
 type ReplicaId = Uuid;
 type LamportTimestamp = usize;
 type LocalTimestamp = usize;
@@ -29,7 +31,6 @@ type Version = (EpochId, VectorClock);
 struct Repository {
     replica_id: ReplicaId,
     work_trees: HashMap<WorkTreeId, WorkTree>,
-    nodes: HashMap<NodeId, Rc<RefCell<Node>>>,
     epochs: HashMap<EpochId, Epoch>,
     local_clock: LocalTimestamp,
 }
@@ -42,9 +43,7 @@ struct Repository {
 // interoperating with external tools that need access to the state of the work tree but aren't
 // designed with Xray in mind.
 struct WorkTree {
-    version: Version,
-    root: Node,
-    epochs: HashMap<EpochId, Epoch>,
+    epoch: Epoch,
     local_clock: LocalTimestamp,
 }
 
@@ -78,6 +77,7 @@ struct Epoch {
     end_version: Option<VectorClock>,
     commit_sha: Option<CommitSha>,
     local_clock: LocalTimestamp, // This clock is used to generate timestamps for OperationIds
+    files: FileTree,
 }
 
 // Any replica can create a new epoch, basing its id on the `local_lock` of the current `WorkTree`.
@@ -173,6 +173,12 @@ enum NodeContent {
     BinaryFile {
         bytes: Register<Vec<u8>>,
     },
+}
+
+impl Repository {
+    fn new(store: Option<Box<Store>>) -> Repository {
+        Self {}
+    }
 }
 
 impl<T> Register<T> {
