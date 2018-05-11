@@ -79,6 +79,7 @@ struct Epoch {
 }
 
 // Any replica can create a new epoch, basing its id on the `local_lock` of the current `WorkTree`.
+#[derive(PartialEq, Eq)]
 struct EpochId {
     replica_id: ReplicaId,
     timestamp: LocalTimestamp,
@@ -124,6 +125,7 @@ enum OperationPayload {
 // the replica that generated the operation, as well as a specific point in logical time on the
 // replica generating the operation, defined by an `epoch_id` and a `timestamp` relative to the
 // start of that epoch.
+#[derive(PartialEq, Eq)]
 struct OperationId {
     epoch_id: EpochId,
     replica_id: ReplicaId,
@@ -168,13 +170,42 @@ enum NodeContent {
     },
     BinaryFile {
         bytes: Register<Vec<u8>>,
+    },
+}
+
+impl<T> Register<T> {
+    fn set(&mut self, id: OperationId, lamport_timestamp: LamportTimestamp, value: T) {
+        self.entries.insert(RegisterEntry {
+            id,
+            lamport_timestamp,
+            value,
+        });
+    }
+
+    fn value(&self) -> Option<&T> {
+        self.entries.iter().next_back().map(|entry| &entry.value)
     }
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
+impl<T> PartialEq for RegisterEntry<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl<T> Eq for RegisterEntry<T> {}
+
+impl<T> PartialOrd for RegisterEntry<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T> Ord for RegisterEntry<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.lamport_timestamp.cmp(&other.lamport_timestamp) {
+            Ordering::Equal => self.id.replica_id.cmp(&other.id.replica_id),
+            result @ _ => result,
+        }
     }
 }
