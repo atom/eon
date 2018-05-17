@@ -1,6 +1,32 @@
 # Live repositories
 
-A live repository captures 
+## Overview
+
+An Xray repository serves a similar role to a Git repository, which is to *persist* a history of changes and to *synchronize* changes between multiple working trees. Xray repositories are actually designed to augment Git repositories, and they add support for fine-grained, operation-oriented version control.
+
+With Git, each working copy is periodically synchronized with a given branch via the manual pushing and pulling of commits. With Xray, multiple developers can share the state of a single working tree via a *sprout*. A sprout is similar to an ordinary Git branch, but changes are continuously synchronized to every replica that has that sprout checked out, without the need for manual conflict resolution.
+
+Sprouts offer a clean abstraction for transmitting the state of a coding session across multiple machines in real time. For example, a cloud-based service such as Code Climate could perform analysis on an active work tree as the code was being actively edited, inserting annotations that are anchored to logical positions in the source code and replicated back to the client to surface valuable information to the developer. Full write access means that a cloud-based service could also perform edits to code such as code formatting.
+
+Live branches also persist a fine-grained edit history at the level of individual keystrokes, and moment of this history can be identified by a unique version vector. This capability could be used to deploy a specific version of a codebase to an interactive development environment or staging server instantly, without the need to create and push a commit. While Git commits are a valuable tool for identifying important moments in the edit history and still serve as the backbone of asynchronous collaboration, continuous persistence and the ability to associate a checkpoint with any moment in history means that "work-in-progress" commits should no longer be required in order to save and share the current state of a work tree. For certain workflows, especially for beginners, committing could potentially be avoided entirely the without risk of losing history.
+
+## Using live repositories
+
+Xray prefers to enable live repositories when possible to support advanced features and persist a fine-grained edit history, but live repositories are optional. They can't be supported in some rare circumstances when the user's machine is offline, and the user may explicitly disable them in order to avoid the storage and memory overhead of a fine-grained edit history and some occasional delays when attempting to edit files during repository updates. The space overhead should be low enough and the delays sufficiently brief and infrequent that the majority of users should have no issue leaving live repositories enabled.
+
+### Command line interface
+
+In the typical usage scenario, command-line interaction should not be required in order to use live work trees in Xray, but covering it first will provide clarity to later sections of this document. All repository operations are performed through the `xrepo` command, which communicates to the same server process as the `xray` command but is intended for repository manipulation rather than opening files for editing. Like `git`, the `xrepo` command interprets its second argument as a subcommand.
+
+* `xrepo init` Run this command in a directory to create an Xray repository. Xray will create a database file named `.xray_repo` in the current directory and add an entry for it to the `.gitignore`. It will then populate the database based on the current state of the file system and create an anonymous live branch in which to store local edits.
+
+* `xrepo remote add <name> <url>` This command registers a remote Xray repository and enables the current repository to
+* `xrepo share [[<remote>]/<name>]`
+* `xrepo join [<remote>/]<name>`
+
+
+
+----------------------------------
 
 ## Live work trees
 
@@ -26,7 +52,7 @@ When Xray first starts or when it detects a change, it synchronizes its internal
 
 If no Git repository is present or if `HEAD` has not changed since the last sync, it synchronizes changes via a diff. It attempts to detect moved files via a similarity strategy like to Git, and updates the `name` and `parent_id` of these files accordingly. New nodes are added for created files, and deleted flags are set for removed files.
 
-If the underlying directory tree is associated with a Git repository, we store the most-recently-synced `HEAD` as a last-writer-wins register associated with the current working copy in the CRDT. If the `HEAD` has changed, either a new commit has been created or a different commit has been checked out. 
+If the underlying directory tree is associated with a Git repository, we store the most-recently-synced `HEAD` as a last-writer-wins register associated with the current working copy in the CRDT. If the `HEAD` has changed, either a new commit has been created or a different commit has been checked out.
 
 A new commit has been created if the parent commit of the new `HEAD` matches the previous `HEAD` stored in our internal register.
 
@@ -37,7 +63,7 @@ A new commit has been created if the parent commit of the new `HEAD` matches the
     * Determine the subset of existing operations that most closely map to the new commit and express it as a state bitmap
     * Apply any "fixup" operations required to transition from the operation subset and the state of the commit.
   * We detect the checkout of an existing commit
-    
+
 
 * Unified identifier space: Each replica maintains a single local clock
 * Sparse state vectors: The state is a bitmap per site that represents a set of local clock values.
@@ -92,4 +118,3 @@ The actual value of such a feature is unclear. The primary purpose of branches i
 The author of the upstream branch could defer coordination with the authors downstream branches, however, creating an asymmetry which might be useful in some settings. For example, imagine a classroom setting in which a teacher is writing tests for a function and then asks students to write the function. Each student could create a branch based on the teacher's branch and attempt to write the function. Then the teacher could continue to make edits, calling the function with different arguments and asking students to re-run tests to discover whether they covered different edge cases.
 
 On a theoretical level, combining the fluidity of real-time collaboration with branching and merging and allowing changes to freely flow is intriguing. In practice however, it's unclear how this feature might be used.
-
