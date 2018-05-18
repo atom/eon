@@ -8,7 +8,7 @@ use notify_cell::NotifyCell;
 use notify_cell::NotifyCellObserver;
 use project::{
     self, LocalProject, PathSearch, PathSearchStatus, Project, ProjectService, RemoteProject,
-    TreeId,
+    RepositoryId,
 };
 use rpc::{self, client, server};
 use serde_json;
@@ -279,9 +279,9 @@ impl FileFinderViewDelegate for WorkspaceView {
         self.updates.set(());
     }
 
-    fn did_confirm(&mut self, tree_id: TreeId, path: &cross_platform::Path, _: &mut Window) {
+    fn did_confirm(&mut self, repo_id: RepositoryId, path: &cross_platform::Path, _: &mut Window) {
         let workspace = self.workspace.borrow();
-        self.open_buffer(workspace.project().open_path(tree_id, path));
+        self.open_buffer(workspace.project().open_path(repo_id, path));
     }
 }
 
