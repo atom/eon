@@ -58,6 +58,8 @@ The trade-off with shared workspaces is that they are centralized. To make works
 
 ---
 
+Everything from here on is potentially out of date
+
 ## Live work trees
 
 A Git repository is associated with one or more work trees, which contain the files and directories that the user actually edits before creating commits. We propose to augment Git with *replicated work trees*, which can be replicated across multiple machines and continuously synchronized in real time in a conflict-free fashion.
