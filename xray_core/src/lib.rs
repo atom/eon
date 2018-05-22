@@ -41,7 +41,6 @@ mod fuzzy;
 mod movement;
 mod never;
 mod project;
-mod repository;
 #[cfg(test)]
 mod stream_ext;
 mod tree;
