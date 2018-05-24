@@ -822,6 +822,10 @@ impl BufferView {
         })
     }
 
+    pub fn buffer_id(&self) -> BufferId {
+        self.buffer.borrow().id()
+    }
+
     fn render_selections(&self, range: Range<Point>) -> Vec<SelectionProps> {
         let buffer = self.buffer.borrow();
         let mut rendered_selections = Vec::new();

@@ -5,7 +5,6 @@ use futures::{future, Async, Future, Poll};
 use fuzzy;
 use never::Never;
 use notify_cell::{NotifyCell, NotifyCellObserver, WeakNotifyCell};
-use repository::{LocalRepository, RepositoryService};
 use rpc;
 use std::cell::{Cell, RefCell};
 use std::cmp;
@@ -17,12 +16,12 @@ use std::sync::Arc;
 use ForegroundExecutor;
 use IntoShared;
 
-pub type RepositoryId = usize;
+pub type TreeId = usize;
 
 pub trait Project {
     fn open_path(
         &self,
-        repo_id: RepositoryId,
+        tree_id: TreeId,
         relative_path: &cross_platform::Path,
     ) -> Box<Future<Item = Rc<RefCell<Buffer>>, Error = Error>>;
     fn open_buffer(
@@ -38,37 +37,37 @@ pub trait Project {
 }
 
 struct BufferWeakSet {
-    buffers: Vec<(BufferId, Weak<RefCell<Buffer>>)>,
+    buffers: Vec<Weak<RefCell<Buffer>>>,
 }
 
 pub struct LocalProject {
     file_provider: Rc<fs::FileProvider>,
-    next_repo_id: RepositoryId,
+    next_tree_id: TreeId,
     next_buffer_id: Rc<Cell<BufferId>>,
-    repos: HashMap<RepositoryId, Rc<LocalRepository>>,
+    trees: HashMap<TreeId, Rc<fs::LocalTree>>,
     buffers: Rc<RefCell<BufferWeakSet>>,
 }
 
 pub struct RemoteProject {
     foreground: ForegroundExecutor,
     service: Rc<RefCell<rpc::client::Service<ProjectService>>>,
-    repos: HashMap<RepositoryId, Box<fs::Tree>>,
+    trees: HashMap<TreeId, Box<fs::Tree>>,
 }
 
 pub struct ProjectService {
     project: Rc<RefCell<LocalProject>>,
-    repo_services: HashMap<RepositoryId, rpc::server::ServiceHandle>,
+    tree_services: HashMap<TreeId, rpc::server::ServiceHandle>,
 }
 
 #[derive(Deserialize, Serialize)]
 pub struct RpcState {
-    repos: HashMap<RepositoryId, rpc::ServiceId>,
+    trees: HashMap<TreeId, rpc::ServiceId>,
 }
 
 #[derive(Deserialize, Serialize)]
 pub enum RpcRequest {
     OpenPath {
-        repo_id: RepositoryId,
+        tree_id: TreeId,
         relative_path: cross_platform::Path,
     },
     OpenBuffer {
@@ -82,7 +81,7 @@ pub enum RpcResponse {
 }
 
 pub struct PathSearch {
-    repo_ids: Vec<RepositoryId>,
+    tree_ids: Vec<TreeId>,
     roots: Arc<Vec<fs::Entry>>,
     needle: Vec<char>,
     max_results: usize,
@@ -101,7 +100,7 @@ pub enum PathSearchStatus {
 pub struct PathSearchResult {
     pub score: fuzzy::Score,
     pub positions: Vec<usize>,
-    pub repo_id: RepositoryId,
+    pub tree_id: TreeId,
     pub relative_path: cross_platform::Path,
     pub display_path: String,
 }
@@ -134,17 +133,17 @@ impl BufferWeakSet {
         }
     }
 
-    fn insert(&mut self, id: BufferId, buffer: Buffer) -> Rc<RefCell<Buffer>> {
+    fn insert(&mut self, buffer: Buffer) -> Rc<RefCell<Buffer>> {
         let buffer = Rc::new(RefCell::new(buffer));
-        self.buffers.push((id, Rc::downgrade(&buffer)));
+        self.buffers.push(Rc::downgrade(&buffer));
         buffer
     }
 
-    fn find_by_buffer_id(&mut self, target_id: BufferId) -> Option<Rc<RefCell<Buffer>>> {
+    fn find_by_buffer_id(&mut self, buffer_id: BufferId) -> Option<Rc<RefCell<Buffer>>> {
         let mut found_buffer = None;
-        self.buffers.retain(|(buffer_id, buffer)| {
+        self.buffers.retain(|buffer| {
             if let Some(buffer) = buffer.upgrade() {
-                if target_id == *buffer_id {
+                if buffer_id == buffer.borrow().id() {
                     found_buffer = Some(buffer);
                 }
                 true
@@ -157,7 +156,7 @@ impl BufferWeakSet {
 
     fn find_by_file_id(&mut self, file_id: fs::FileId) -> Option<Rc<RefCell<Buffer>>> {
         let mut found_buffer = None;
-        self.buffers.retain(|(_, buffer)| {
+        self.buffers.retain(|buffer| {
             if let Some(buffer) = buffer.upgrade() {
                 if buffer.borrow().file_id().map_or(false, |id| file_id == id) {
                     found_buffer = Some(buffer);
@@ -172,36 +171,36 @@ impl BufferWeakSet {
 }
 
 impl LocalProject {
-    pub fn new<T>(file_provider: Rc<fs::FileProvider>, repos: Vec<T>) -> Self
+    pub fn new<T>(file_provider: Rc<fs::FileProvider>, trees: Vec<T>) -> Self
     where
         T: 'static + fs::LocalTree,
     {
         let mut project = LocalProject {
             file_provider,
-            next_repo_id: 0,
+            next_tree_id: 0,
             next_buffer_id: Rc::new(Cell::new(0)),
-            repos: HashMap::new(),
+            trees: HashMap::new(),
             buffers: Rc::new(RefCell::new(BufferWeakSet::new())),
         };
-        for repo in repos {
-            project.add_repo(repo);
+        for tree in trees {
+            project.add_tree(tree);
         }
         project
     }
 
-    fn add_repo<T: 'static + fs::LocalTree>(&mut self, repo: T) {
-        let id = self.next_repo_id;
-        self.next_repo_id += 1;
-        self.repos.insert(id, Rc::new(repo));
+    fn add_tree<T: 'static + fs::LocalTree>(&mut self, tree: T) {
+        let id = self.next_tree_id;
+        self.next_tree_id += 1;
+        self.trees.insert(id, Rc::new(tree));
     }
 
     fn resolve_path(
         &self,
-        repo_id: RepositoryId,
+        tree_id: TreeId,
         relative_path: &cross_platform::Path,
     ) -> Option<cross_platform::Path> {
-        self.repos.get(&repo_id).map(|repo| {
-            let mut absolute_path = repo.path().clone();
+        self.trees.get(&tree_id).map(|tree| {
+            let mut absolute_path = tree.path().clone();
             absolute_path.push_path(relative_path);
             absolute_path
         })
@@ -211,10 +210,10 @@ impl LocalProject {
 impl Project for LocalProject {
     fn open_path(
         &self,
-        repo_id: RepositoryId,
+        tree_id: TreeId,
         relative_path: &cross_platform::Path,
     ) -> Box<Future<Item = Rc<RefCell<Buffer>>, Error = Error>> {
-        if let Some(absolute_path) = self.resolve_path(repo_id, relative_path) {
+        if let Some(absolute_path) = self.resolve_path(tree_id, relative_path) {
             let next_buffer_id_cell = self.next_buffer_id.clone();
             let buffers = self.buffers.clone();
             Box::new(
@@ -233,10 +232,10 @@ impl Project for LocalProject {
                                 } else {
                                     let buffer_id = next_buffer_id_cell.get();
                                     next_buffer_id_cell.set(next_buffer_id_cell.get() + 1);
-                                    let mut buffer = Buffer::new();
+                                    let mut buffer = Buffer::new(buffer_id);
                                     buffer.edit(&[0..0], content.as_str());
                                     buffer.set_file(file);
-                                    Ok(buffers.borrow_mut().insert(buffer_id, buffer))
+                                    Ok(buffers.borrow_mut().insert(buffer))
                                 }
                             }))
                         }
@@ -270,15 +269,15 @@ impl Project for LocalProject {
     ) -> (PathSearch, NotifyCellObserver<PathSearchStatus>) {
         let (updates, updates_observer) = NotifyCell::weak(PathSearchStatus::Pending);
 
-        let mut repo_ids = Vec::new();
+        let mut tree_ids = Vec::new();
         let mut roots = Vec::new();
-        for (id, repo) in &self.repos {
-            repo_ids.push(*id);
-            roots.push(repo.root().clone());
+        for (id, tree) in &self.trees {
+            tree_ids.push(*id);
+            roots.push(tree.root().clone());
         }
 
         let search = PathSearch {
-            repo_ids,
+            tree_ids,
             roots: Arc::new(roots),
             needle: needle.chars().collect(),
             max_results,
@@ -297,18 +296,18 @@ impl RemoteProject {
         service: rpc::client::Service<ProjectService>,
     ) -> Result<Self, rpc::Error> {
         let state = service.state()?;
-        let mut repos = HashMap::new();
-        for (repo_id, service_id) in &state.repos {
-            let repo_service = service
+        let mut trees = HashMap::new();
+        for (tree_id, service_id) in &state.trees {
+            let tree_service = service
                 .take_service(*service_id)
-                .expect("The server should create services for each repo in our project state.");
-            let remote_repo = fs::RemoteTree::new(foreground.clone(), repo_service);
-            repos.insert(*repo_id, Box::new(remote_repo) as Box<fs::Tree>);
+                .expect("The server should create services for each tree in our project state.");
+            let remote_tree = fs::RemoteTree::new(foreground.clone(), tree_service);
+            trees.insert(*tree_id, Box::new(remote_tree) as Box<fs::Tree>);
         }
         Ok(Self {
             foreground,
             service: service.into_shared(),
-            repos,
+            trees,
         })
     }
 }
@@ -316,7 +315,7 @@ impl RemoteProject {
 impl Project for RemoteProject {
     fn open_path(
         &self,
-        repo_id: RepositoryId,
+        tree_id: TreeId,
         relative_path: &cross_platform::Path,
     ) -> Box<Future<Item = Rc<RefCell<Buffer>>, Error = Error>> {
         let foreground = self.foreground.clone();
@@ -326,7 +325,7 @@ impl Project for RemoteProject {
             self.service
                 .borrow()
                 .request(RpcRequest::OpenPath {
-                    repo_id,
+                    tree_id,
                     relative_path: relative_path.clone(),
                 })
                 .then(move |response| {
@@ -385,15 +384,15 @@ impl Project for RemoteProject {
     ) -> (PathSearch, NotifyCellObserver<PathSearchStatus>) {
         let (updates, updates_observer) = NotifyCell::weak(PathSearchStatus::Pending);
 
-        let mut repo_ids = Vec::new();
+        let mut tree_ids = Vec::new();
         let mut roots = Vec::new();
-        for (id, repo) in &self.repos {
-            repo_ids.push(*id);
-            roots.push(repo.root().clone());
+        for (id, tree) in &self.trees {
+            tree_ids.push(*id);
+            roots.push(tree.root().clone());
         }
 
         let search = PathSearch {
-            repo_ids,
+            tree_ids,
             roots: Arc::new(roots),
             needle: needle.chars().collect(),
             max_results,
@@ -410,7 +409,7 @@ impl ProjectService {
     pub fn new(project: Rc<RefCell<LocalProject>>) -> Self {
         Self {
             project,
-            repo_services: HashMap::new(),
+            tree_services: HashMap::new(),
         }
     }
 }
@@ -423,12 +422,12 @@ impl rpc::server::Service for ProjectService {
 
     fn init(&mut self, connection: &rpc::server::Connection) -> Self::State {
         let mut state = RpcState {
-            repos: HashMap::new(),
+            trees: HashMap::new(),
         };
-        for (repo_id, repo) in &self.project.borrow().repos {
-            let handle = connection.add_service(RepositoryService::new(repo.clone()));
-            state.repos.insert(*repo_id, handle.service_id());
-            self.repo_services.insert(*repo_id, handle);
+        for (tree_id, tree) in &self.project.borrow().trees {
+            let handle = connection.add_service(fs::TreeService::new(tree.clone()));
+            state.trees.insert(*tree_id, handle.service_id());
+            self.tree_services.insert(*tree_id, handle);
         }
 
         state
@@ -448,14 +447,14 @@ impl rpc::server::Service for ProjectService {
     ) -> Option<Box<Future<Item = Self::Response, Error = Never>>> {
         match request {
             RpcRequest::OpenPath {
-                repo_id,
+                tree_id,
                 relative_path,
             } => {
                 let connection = connection.clone();
                 Some(Box::new(
                     self.project
                         .borrow()
-                        .open_path(repo_id, &relative_path)
+                        .open_path(tree_id, &relative_path)
                         .then(move |result| {
                             Ok(RpcResponse::OpenedBuffer(result.map(|buffer| {
                                 connection
@@ -614,10 +613,10 @@ impl PathSearch {
                         if results.len() < self.max_results
                             || score > results.peek().map(|r| r.score).unwrap()
                         {
-                            let repo_id = if self.roots.len() == 1 {
-                                self.repo_ids[0]
+                            let tree_id = if self.roots.len() == 1 {
+                                self.tree_ids[0]
                             } else {
-                                self.repo_ids[stack[0].child_index]
+                                self.tree_ids[stack[0].child_index]
                             };
 
                             let mut relative_path = cross_platform::Path::new();
@@ -637,7 +636,7 @@ impl PathSearch {
                             }
                             results.push(PathSearchResult {
                                 score,
-                                repo_id,
+                                tree_id,
                                 relative_path,
                                 display_path,
                                 positions: positions.clone(),
@@ -735,15 +734,15 @@ mod tests {
         let file_provider = Rc::new(TestFileProvider::new());
         let project = build_project(file_provider.clone());
 
-        let repo_id = 0;
+        let tree_id = 0;
         let relative_path = cross_platform::Path::from("subdir-a/subdir-1/bar");
         file_provider.write_sync(
-            project.resolve_path(repo_id, &relative_path).unwrap(),
+            project.resolve_path(tree_id, &relative_path).unwrap(),
             "abc",
         );
 
-        let buffer_future_1 = project.open_path(repo_id, &relative_path);
-        let buffer_future_2 = project.open_path(repo_id, &relative_path);
+        let buffer_future_1 = project.open_path(tree_id, &relative_path);
+        let buffer_future_2 = project.open_path(tree_id, &relative_path);
         let (buffer_1, buffer_2) = buffer_future_1.join(buffer_future_2).wait().unwrap();
         assert!(Rc::ptr_eq(&buffer_1, &buffer_2));
     }
@@ -753,32 +752,32 @@ mod tests {
         let file_provider = Rc::new(TestFileProvider::new());
         let project = build_project(file_provider.clone());
 
-        let repo_id = 0;
+        let tree_id = 0;
         let relative_path = cross_platform::Path::from("subdir-a/subdir-1/bar");
-        let absolute_path = project.resolve_path(repo_id, &relative_path).unwrap();
+        let absolute_path = project.resolve_path(tree_id, &relative_path).unwrap();
         file_provider.write_sync(absolute_path, "disk");
 
-        let buffer_1 = project.open_path(repo_id, &relative_path).wait().unwrap();
+        let buffer_1 = project.open_path(tree_id, &relative_path).wait().unwrap();
         buffer_1.borrow_mut().edit(&[0..4], "memory");
-        let buffer_2 = project.open_path(repo_id, &relative_path).wait().unwrap();
+        let buffer_2 = project.open_path(tree_id, &relative_path).wait().unwrap();
         assert_eq!(buffer_2.borrow().to_string(), "memory");
 
         // Dropping only one of the two strong references does not release the buffer.
         drop(buffer_2);
-        let buffer_3 = project.open_path(repo_id, &relative_path).wait().unwrap();
+        let buffer_3 = project.open_path(tree_id, &relative_path).wait().unwrap();
         assert_eq!(buffer_3.borrow().to_string(), "memory");
 
         // Dropping all strong references causes the buffer to be released.
         drop(buffer_1);
         drop(buffer_3);
-        let buffer_4 = project.open_path(repo_id, &relative_path).wait().unwrap();
+        let buffer_4 = project.open_path(tree_id, &relative_path).wait().unwrap();
         assert_eq!(buffer_4.borrow().to_string(), "disk");
     }
 
     #[test]
-    fn test_search_one_repo() {
-        let repo = TestTree::from_json(
-            "/Users/someone/repo",
+    fn test_search_one_tree() {
+        let tree = TestTree::from_json(
+            "/Users/someone/tree",
             json!({
                 "root-1": {
                     "file-1": null,
@@ -795,7 +794,7 @@ mod tests {
                 }
             }),
         );
-        let project = LocalProject::new(Rc::new(TestFileProvider::new()), vec![repo]);
+        let project = LocalProject::new(Rc::new(TestFileProvider::new()), vec![tree]);
         let (mut search, observer) = project.search_paths("sub2", 10, true);
 
         assert_eq!(search.poll(), Ok(Async::Ready(())));
@@ -825,7 +824,7 @@ mod tests {
     }
 
     #[test]
-    fn test_search_many_repos() {
+    fn test_search_many_trees() {
         let project = build_project(Rc::new(TestFileProvider::new()));
 
         let (mut search, observer) = project.search_paths("bar", 10, true);
@@ -884,25 +883,25 @@ mod tests {
         );
 
         let PathSearchResult {
-            repo_id,
+            tree_id,
             ref relative_path,
             ..
         } = remote_observer.get().unwrap()[0];
 
         let absolute_path = local_project
             .borrow()
-            .resolve_path(repo_id, relative_path)
+            .resolve_path(tree_id, relative_path)
             .unwrap();
         file_provider.write_sync(absolute_path, "abc");
 
         let remote_buffer = reactor
-            .run(remote_project.open_path(repo_id, &relative_path))
+            .run(remote_project.open_path(tree_id, &relative_path))
             .unwrap();
         let local_buffer = reactor
             .run(
                 local_project
                     .borrow_mut()
-                    .open_path(repo_id, &relative_path),
+                    .open_path(tree_id, &relative_path),
             )
             .unwrap();
 
@@ -913,7 +912,7 @@ mod tests {
     }
 
     fn build_project(file_provider: Rc<TestFileProvider>) -> LocalProject {
-        let repo_1 = TestTree::from_json(
+        let tree_1 = TestTree::from_json(
             "/Users/someone/foo",
             json!({
                 "subdir-a": {
@@ -925,9 +924,9 @@ mod tests {
                 }
             }),
         );
-        repo_1.populated.set(true);
+        tree_1.populated.set(true);
 
-        let repo_2 = TestTree::from_json(
+        let tree_2 = TestTree::from_json(
             "/Users/someone/bar",
             json!({
                 "subdir-b": {
@@ -938,25 +937,25 @@ mod tests {
                 }
             }),
         );
-        repo_2.populated.set(true);
+        tree_2.populated.set(true);
 
-        LocalProject::new(file_provider, vec![repo_1, repo_2])
+        LocalProject::new(file_provider, vec![tree_1, tree_2])
     }
 
     fn summarize_results(
         results: &PathSearchStatus,
-    ) -> Option<Vec<(RepositoryId, String, String, Vec<usize>)>> {
+    ) -> Option<Vec<(TreeId, String, String, Vec<usize>)>> {
         match results {
             &PathSearchStatus::Pending => None,
             &PathSearchStatus::Ready(ref results) => {
                 let summary = results
                     .iter()
                     .map(|result| {
-                        let repo_id = result.repo_id;
+                        let tree_id = result.tree_id;
                         let relative_path = result.relative_path.to_string_lossy();
                         let display_path = result.display_path.clone();
                         let positions = result.positions.clone();
-                        (repo_id, relative_path, display_path, positions)
+                        (tree_id, relative_path, display_path, positions)
                     })
                     .collect();
                 Some(summary)

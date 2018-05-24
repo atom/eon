@@ -18,7 +18,6 @@ extern crate smallvec;
 extern crate tokio_core;
 #[cfg(test)]
 extern crate tokio_timer;
-extern crate uuid;
 #[cfg(target_arch = "wasm32")]
 extern crate wasm_bindgen;
 

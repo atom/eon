@@ -1,7 +1,7 @@
 use cross_platform;
 use futures::{Async, Poll, Stream};
 use notify_cell::{NotifyCell, NotifyCellObserver};
-use project::{PathSearch, PathSearchResult, PathSearchStatus, RepositoryId};
+use project::{PathSearch, PathSearchResult, PathSearchStatus, TreeId};
 use serde_json;
 use window::{View, WeakViewHandle, Window};
 
@@ -15,7 +15,7 @@ pub trait FileFinderViewDelegate {
     fn did_close(&mut self);
     fn did_confirm(
         &mut self,
-        repo_id: RepositoryId,
+        tree_id: TreeId,
         relative_path: &cross_platform::Path,
         window: &mut Window,
     );
@@ -143,7 +143,7 @@ impl<T: FileFinderViewDelegate> FileFinderView<T> {
     fn confirm(&mut self, window: &mut Window) {
         if let Some(search_result) = self.search_results.get(self.selected_index) {
             self.delegate.map(|delegate| {
-                delegate.did_confirm(search_result.repo_id, &search_result.relative_path, window)
+                delegate.did_confirm(search_result.tree_id, &search_result.relative_path, window)
             });
         }
     }
