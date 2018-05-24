@@ -564,7 +564,7 @@ impl<'tree, T: 'tree + Item> Cursor<'tree, T> {
             debug_assert!(*pos >= D::from_summary(&self.summary));
             while self.stack.len() > 0 {
                 {
-                    let &mut (prev_subtree, ref mut index, _) = self.stack.last_mut().unwrap();
+                    let (prev_subtree, index, _) = self.stack.last_mut().unwrap();
                     if prev_subtree.height() > 1 {
                         *index += 1;
                     }
