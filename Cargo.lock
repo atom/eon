@@ -234,6 +234,7 @@ name = "eon"
 version = "0.1.0"
 dependencies = [
  "parking_lot 0.5.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rand 0.3.22 (registry+https://github.com/rust-lang/crates.io-index)",
  "smallvec 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
