@@ -1,6 +1,0 @@
-#!/bin/bash
-
-set -e
-
-cd xray_core
-cargo bench "$@"
